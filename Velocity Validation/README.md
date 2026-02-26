@@ -165,6 +165,26 @@ FROM
     EDP.STD_JDA.SKUEXTRACT
 ```
 
+## 🧮 HDS Velocity Reclassification (SQL)
+
+The Snowflake reclassification logic (including the **New SKU** bucket definition) is maintained in:
+
+- [sql/sku_velocity_reclassification_hds.sql](sql/sku_velocity_reclassification_hds.sql)
+
+**New SKU definition (as of 2026-02-04):** a SKU is classified as **New** only when it has **no first receipt date** (i.e., first receipt is null/missing). SKUs with a valid first receipt date are **Not New**, regardless of how recent the receipt is.
+
+## 🔍 Compare Old vs New Uploads
+
+To request a new round of uploads only for rows that changed between the last request and the new recalculation, you can diff two exported upload files (CSV or XLSX):
+
+```bash
+python compare_velocity_uploads.py --old prior_upload.xlsx --new recalculated_upload.xlsx --out delta.csv
+```
+
+The `delta.csv` will include:
+- rows only present in one file
+- rows where the proposed velocity changed for the same `JDA_ITEM` + `JDA_LOC`
+
 **Connection Details:**
 - **Account**: HDSUPPLY-DATA
 - **Database**: EDP

@@ -47,3 +47,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# .NET build artifacts
+Velocity Validation/bin/
+Velocity Validation/obj/

@@ -650,11 +650,11 @@ class VelocityValidatorApp:
             # Convert merge columns to string type to ensure compatibility
             df['JDA_ITEM'] = df['JDA_ITEM'].astype(str)
             df['JDA_LOC'] = df['JDA_LOC'].astype(str)
-            self.snowflake_data['JDA_ITEM'] = self.snowflake_data['JDA_ITEM'].astype(str)
-            self.snowflake_data['JDA_LOC'] = self.snowflake_data['JDA_LOC'].astype(str)
+            self.snowflake_data['JDA_ITEM'] = self.snowflake_data['JDA_ITEM'].astype(str) # type: ignore
+            self.snowflake_data['JDA_LOC'] = self.snowflake_data['JDA_LOC'].astype(str) # type: ignore
             
             df_merged = df.merge(
-                self.snowflake_data,
+                self.snowflake_data, # type: ignore
                 on=['JDA_ITEM', 'JDA_LOC'],
                 how='left'
             )
