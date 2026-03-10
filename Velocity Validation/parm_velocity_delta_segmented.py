@@ -84,6 +84,16 @@ def _read_parm(path: Path, sheet: str) -> pd.DataFrame:
     df.columns = [str(c).strip() for c in df.columns]
 
     required = ["ITEM", "DC NUMBER", "VELOCITY"]
+    col_lookup = {str(c).strip().upper(): str(c).strip() for c in df.columns}
+    rename_map: dict[str, str] = {}
+    for req in required:
+        actual = col_lookup.get(req)
+        if actual and actual != req:
+            rename_map[actual] = req
+
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise KeyError(
