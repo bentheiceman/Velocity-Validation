@@ -1,4 +1,4 @@
-"""Generate a segmented 'not updated' velocity workbook matching the channel-management template.
+"""Generate a segmented velocity verification workbook matching the channel-management template.
 
 Template format
 - Sheets: A, B, C, D, E, Summary
@@ -7,13 +7,15 @@ Template format
   SAP_VELOCITY, VELOCITY_REASON, Old_Proposed_Velocity
 
 This script compares:
-- Thursday recommendations (CSV/XLSX) containing JDA_ITEM/JDA_LOC/PROPOSED_VELOCITY/etc
+- Thursday recommendations / upload file (CSV/XLSX) containing JDA_ITEM/JDA_LOC/PROPOSED_VELOCITY/etc
 vs
-- Parm Management Weekly Report (XLSX) sheet 'TW Data' containing ITEM/DC NUMBER/VELOCITY
+- Parm Management Weekly Report (XLSX) containing Item/DC Number/Velocity (or ITEM/DC NUMBER/VELOCITY)
 
-and outputs only rows that are not yet updated in the system:
-- Missing in Parm (left_only)
-- Present in Parm but VELOCITY != PROPOSED_VELOCITY
+It can output different subsets via --mode:
+- not_updated (default): Missing in Parm OR velocity mismatch
+- missing_only: Missing in Parm (cannot validate)
+- mismatch_only: Present in Parm but VELOCITY != PROPOSED_VELOCITY
+- updated_only: Present in Parm and VELOCITY == PROPOSED_VELOCITY (already updated; would be a no-op if re-uploaded)
 
 Usage
   python parm_velocity_delta_segmented.py \
@@ -37,9 +39,27 @@ DEFAULT_PARM_SHEET = "TW Data"
 DEFAULT_TEMPLATE = Path(r"C:\Users\1015723\Downloads\HDS_velocity_changes_segmented_New SKU.xlsx")
 
 
+VALID_MODES = {"not_updated", "missing_only", "mismatch_only", "updated_only"}
+
+
 def _read_thursday(path: Path) -> pd.DataFrame:
     if path.suffix.lower() in {".xlsx", ".xls"}:
-        df = pd.read_excel(path, dtype=str)
+        # If the input is a segmented workbook (tabs A-E), concatenate those tabs.
+        try:
+            xl = pd.ExcelFile(path)
+            sheet_set = {str(s).strip() for s in xl.sheet_names}
+            segmented = all(s in sheet_set for s in ["A", "B", "C", "D", "E"])
+        except Exception:
+            xl = None
+            segmented = False
+
+        if segmented and xl is not None:
+            frames: list[pd.DataFrame] = []
+            for s in ["A", "B", "C", "D", "E"]:
+                frames.append(pd.read_excel(path, sheet_name=s, dtype=str))
+            df = pd.concat(frames, ignore_index=True)
+        else:
+            df = pd.read_excel(path, dtype=str)
     elif path.suffix.lower() == ".csv":
         df = pd.read_csv(path, dtype=str)
     else:
@@ -109,7 +129,10 @@ def _read_parm(path: Path, sheet: str) -> pd.DataFrame:
     return df
 
 
-def _build_not_updated(thursday: pd.DataFrame, parm: pd.DataFrame) -> pd.DataFrame:
+def _build_delta(thursday: pd.DataFrame, parm: pd.DataFrame, mode: str) -> pd.DataFrame:
+    if mode not in VALID_MODES:
+        raise ValueError(f"Unsupported mode: {mode}. Valid: {sorted(VALID_MODES)}")
+
     th = thursday.copy()
     th = th.rename(columns={"JDA_ITEM": "ITEM", "JDA_LOC": "DC NUMBER"})
 
@@ -120,22 +143,30 @@ def _build_not_updated(thursday: pd.DataFrame, parm: pd.DataFrame) -> pd.DataFra
     merged["parm_velocity"] = merged["VELOCITY"].astype(str).str.strip().replace({"nan": ""})
     merged["proposed_velocity"] = merged["PROPOSED_VELOCITY"].astype(str).str.strip().replace({"nan": ""})
 
-    # Not updated if missing in Parm OR mismatch.
-    not_updated = merged[(merged["_merge"] == "left_only") | (merged["parm_velocity"] != merged["proposed_velocity"])].copy()
+    if mode == "not_updated":
+        subset = merged[(merged["_merge"] == "left_only") | (merged["parm_velocity"] != merged["proposed_velocity"])].copy()
+    elif mode == "missing_only":
+        subset = merged[merged["_merge"] == "left_only"].copy()
+    elif mode == "mismatch_only":
+        subset = merged[(merged["_merge"] != "left_only") & (merged["parm_velocity"] != merged["proposed_velocity"])].copy()
+    elif mode == "updated_only":
+        subset = merged[(merged["_merge"] != "left_only") & (merged["parm_velocity"] == merged["proposed_velocity"])].copy()
+    else:
+        raise ValueError(f"Unhandled mode: {mode}")
 
     # Map into template column names.
     out = pd.DataFrame(
         {
-            "JDA_ITEM": not_updated["ITEM"].astype(str).str.strip(),
-            "JDA_LOC": not_updated["DC NUMBER"].astype(str).str.strip(),
-            "PROPOSED_VELOCITY": not_updated["PROPOSED_VELOCITY"].astype(str).str.strip(),
-            "PROPOSED_VELOCITY_": not_updated["PROPOSED_VELOCITY_"].astype(str).str.strip(),
-            "SERVICE_LEVEL": not_updated["SERVICE_LEVEL"].astype(str).str.strip(),
+            "JDA_ITEM": subset["ITEM"].astype(str).str.strip(),
+            "JDA_LOC": subset["DC NUMBER"].astype(str).str.strip(),
+            "PROPOSED_VELOCITY": subset["PROPOSED_VELOCITY"].astype(str).str.strip(),
+            "PROPOSED_VELOCITY_": subset["PROPOSED_VELOCITY_"].astype(str).str.strip(),
+            "SERVICE_LEVEL": subset["SERVICE_LEVEL"].astype(str).str.strip(),
             # Put today's system velocity in SAP_VELOCITY for validation.
-            "SAP_VELOCITY": not_updated["parm_velocity"].astype(str).str.strip(),
-            "VELOCITY_REASON": not_updated["VELOCITY_REASON"].astype(str).str.strip(),
+            "SAP_VELOCITY": subset["parm_velocity"].astype(str).str.strip(),
+            "VELOCITY_REASON": subset["VELOCITY_REASON"].astype(str).str.strip(),
             # Preserve what SAP_VELOCITY was at time of Thursday export.
-            "Old_Proposed_Velocity": not_updated["SAP_VELOCITY"].astype(str).str.strip(),
+            "Old_Proposed_Velocity": subset["SAP_VELOCITY"].astype(str).str.strip(),
         }
     )
 
@@ -218,7 +249,7 @@ def write_segmented(template_path: Path, out_path: Path, not_updated: pd.DataFra
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Create a segmented not-updated workbook in the standard A-E template format.")
+    parser = argparse.ArgumentParser(description="Create a segmented velocity verification workbook in the standard A-E template format.")
     parser.add_argument("--thursday", help="Thursday recommendations export (.csv/.xlsx)")
     parser.add_argument("--parm", help="Parm Management Weekly Report (.xlsx)")
     parser.add_argument(
@@ -229,6 +260,12 @@ def main() -> int:
     parser.add_argument("--sheet", default=DEFAULT_PARM_SHEET, help=f"Parm sheet name (default: {DEFAULT_PARM_SHEET})")
     parser.add_argument("--delta-sheet", default="not_updated", help="Delta workbook sheet name (default: not_updated)")
     parser.add_argument("--template", default=str(DEFAULT_TEMPLATE), help="Template workbook path")
+    parser.add_argument(
+        "--mode",
+        default="not_updated",
+        choices=sorted(VALID_MODES),
+        help="Which subset to output (default: not_updated)",
+    )
 
     args = parser.parse_args()
 
@@ -251,7 +288,7 @@ def main() -> int:
         parm_path = Path(args.parm)
         th = _read_thursday(thursday_path)
         parm = _read_parm(parm_path, sheet=args.sheet)
-        not_updated = _build_not_updated(th, parm)
+        not_updated = _build_delta(th, parm, mode=args.mode)
 
     counts = write_segmented(template_path, out_path, not_updated)
 
