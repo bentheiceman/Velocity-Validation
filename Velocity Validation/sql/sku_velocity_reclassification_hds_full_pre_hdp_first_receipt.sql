@@ -12,14 +12,6 @@
 --   Change: Redefined "New" SKU bucket to ONLY include SKUs with NO first receipt date.
 --           Previously, SKUs with a first receipt within the last 13 weeks were also classified as New.
 --   Reason: Prevent recently-received SKUs from landing in the New SKU bucket when a valid first receipt exists.
---
---   Updated: March 19, 2026
---   Change: Added HDP first receipt date cross-reference via hdp_first_receipt_xref CTE.
---           COALESCE(hds_first_receive_date, hdp_first_receive_date) now drives sku_status, proposed_velocity,
---           sku_dc_first_receive_date, and first_receipt_flg in all_dc_skus.
---   Reason: Temporary measure to supplement HDS first receipt coverage with historical HDP first receipt data
---           until sufficient post-Tempo HDS first receipts accumulate.
---   Rollback: Pre-change version saved as sku_velocity_reclassification_hds_full_pre_hdp_first_receipt.sql
 -- ========================================================================================================================================
 
 -- ========================================================================================================================================
@@ -302,32 +294,6 @@ create or replace table dm_supplychain.public.sku_velocity_reclassification_anal
     
     )
 
-    -- HDP first receipt date cross-reference (TEMPORARY — until post-Tempo HDS first receipts are sufficient)
-    -- Maps HDP first_receive_date to HDS material/plant via ITEM_X_REF and TEMPO_IMPACTED_WAREHOUSES
-
-    ,hdp_first_receipt_xref as (
-
-        select
-            t1.usn                  as hdp_usn
-            ,t1.warehouse_num       as hdp_warehouse_num
-            ,t1.first_receive_date  as hdp_first_receive_date
-            ,t2.material_number     as hds_material_nbr
-            ,t4.destination_wh      as hds_plant_id
-
-        from dm_supplychain.ia_reporting_data.v_hdp_first_receive_date as t1
-
-        inner join dm_supplychain.public.item_x_ref as t2
-            on t1.usn = t2.usn
-
-        inner join edp.str_master_data.plant as t3
-            on t1.warehouse_num = t3.plant_id
-
-        left join dm_supplychain.instock.tempo_impacted_warehouses as t4
-            on t1.warehouse_num = t4.source_wh
-            and t4.current_status = 'Complete'
-
-    )
-
     -- UNIVERSE of ACTIVE DC-SKUS (active + filtering + attributes)
     
     ,all_dc_skus as (
@@ -352,13 +318,13 @@ create or replace table dm_supplychain.public.sku_velocity_reclassification_anal
                 else 'not superseded'
             end                                                                             as superseded_sku
 
-            -- UPDATED (2026-03-19): COALESCE HDS first receipt with HDP first receipt (temporary Tempo measure)
+            -- UPDATED (2026-02-04): "New" means NO first receipt date.
             ,case 
-                when coalesce(frdt.vendor_sku_dc_first_receive_date, hdp_fr.hdp_first_receive_date) is null then 'New'
+                when frdt.vendor_sku_dc_first_receive_date is null then 'New'
                 else 'Not New'
             end                                                                             as sku_status
 
-            ,coalesce(frdt.vendor_sku_dc_first_receive_date, hdp_fr.hdp_first_receive_date) as sku_dc_first_receive_date
+            ,frdt.vendor_sku_dc_first_receive_date                                          as sku_dc_first_receive_date
             ,up.unit_retail_price_dollars                                                   as sku_retail_price
             ,case
                 when sku_extract.udc_pir_cost is null then 0
@@ -372,9 +338,9 @@ create or replace table dm_supplychain.public.sku_velocity_reclassification_anal
     
             ,sku_extract.udc_velocity_code                                                  as system_velocity
 
-            -- UPDATED (2026-03-19): COALESCE HDS first receipt with HDP first receipt (temporary Tempo measure)
+            -- UPDATED (2026-02-04): Proposed velocity defaults to C only when there is NO first receipt.
             ,case 
-                when coalesce(frdt.vendor_sku_dc_first_receive_date, hdp_fr.hdp_first_receive_date) is null then 'C' 
+                when frdt.vendor_sku_dc_first_receive_date is null then 'C' 
                 else 'E' 
             end                                                                             as proposed_velocity
 
@@ -400,9 +366,8 @@ create or replace table dm_supplychain.public.sku_velocity_reclassification_anal
                 else true
             end                                                                             as is_filtered_out
     
-            -- UPDATED (2026-03-19): COALESCE HDS first receipt with HDP first receipt (temporary Tempo measure)
             ,case
-                when coalesce(frdt.vendor_sku_dc_first_receive_date, hdp_fr.hdp_first_receive_date) is null then 'No First Receipt'
+                when frdt.vendor_sku_dc_first_receive_date is null then 'No First Receipt'
                 else 'First Receipt'
             end                                                                             as first_receipt_flg
                 
@@ -480,12 +445,7 @@ create or replace table dm_supplychain.public.sku_velocity_reclassification_anal
     
         left outer join m
             on ltrim(mpc.matnr, '0') = m.item
-            and mpc.werks = m.warehouse_number
-
-        -- ADDED (2026-03-19): HDP first receipt cross-reference (temporary Tempo measure)
-        left outer join hdp_first_receipt_xref as hdp_fr
-            on ltrim(mpc.matnr, '0') = ltrim(hdp_fr.hds_material_nbr, '0')
-            and mpc.werks = hdp_fr.hds_plant_id
+            and mpc.werks = m.warehouse_number        
     
         group by all
         
