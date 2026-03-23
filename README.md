@@ -1,4 +1,4 @@
-# HD SUPPLY™ VELOCITY VALIDATOR
+VELOCITY VALIDATOR
 **Developed by: Ben F. Benjamaa**
 
 A modern, self-contained application for validating velocity codes against Snowflake data with an advanced black and yellow HD Supply™ branded interface.
